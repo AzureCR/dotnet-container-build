@@ -6,4 +6,8 @@
     <RootNamespace>DotNet_Container_Build</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure" Version="3.3.19" />
+  </ItemGroup>
+
 </Project>
