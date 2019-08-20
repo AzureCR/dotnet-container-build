@@ -8,6 +8,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Konsole;
 using System.Collections.Generic;
+using MSBuildTasks;
 
 namespace DotNet_Container_Build
 {
@@ -18,12 +19,21 @@ namespace DotNet_Container_Build
     class Program
     {
         const string Username = "csharpsdkblobtest";
-        const string Password = "YIn=nAEVom8eRkZPT4wEQ4PL5O4oSiiX";
+        static string Password = Environment.GetEnvironmentVariable("TEST_PASSWORD");
         const string Registry = "csharpsdkblobtest.azurecr.io";
         const string RepoOrigin = "jenkins";
         const string RepoOutput = "jenkins9";
         const string OutputTag = "latest";
         const int MaxParallel = 4;
+
+        struct ImageRef
+        {
+            public string Registry { get; set; }
+            public string Repository { get; set; }
+            public string Tag { get; set; }
+            public string Password { get; set; }
+            public string Username { get; set; }
+        }
 
         static void Main()
         {
@@ -92,6 +102,133 @@ namespace DotNet_Container_Build
 
             Console.WriteLine("Successfully created " + output + ":" + outputTag);
         }
+
+        private static async Task CopyBaseImageLayers(ImageRef origin, ImageRef output)
+        {
+            AzureContainerRegistryClient originClient = new AzureContainerRegistryClient();
+            AzureContainerRegistryClient outputClient = new AzureContainerRegistryClient();
+
+            V2Manifest manifest = (V2Manifest)await originClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+
+            var listOfActions = new List<Action>();
+
+            // Acquire and upload all layers
+            for (int i = 0; i < manifest.Layers.Count; i++)
+            {
+                var cur = i;
+                listOfActions.Add(() =>
+                {
+                    var progress = new ProgressBar(3);
+                    progress.Refresh(0, "Starting");
+                    var layer = originClient.GetBlobAsync(origin.Repository, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
+                    progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
+                    string digestLayer = UploadLayer(layer, output.Repository, outputClient).GetAwaiter().GetResult();
+                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output);
+                    manifest.Layers[cur].Digest = digestLayer;
+                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output);
+                });
+            }
+
+            // Acquire config Blob
+            listOfActions.Add(() =>
+            {
+                var progress = new ProgressBar(3);
+                progress.Next("Downloading config blob from " + origin.Repository);
+                var configBlob = originClient.GetBlobAsync(origin.Repository, manifest.Config.Digest).GetAwaiter().GetResult();
+                progress.Next("Uploading config blob to " + output.Repository);
+                string digestConfig = UploadLayer(configBlob, output.Repository, outputClient).GetAwaiter().GetResult();
+                progress.Next("Uploaded config blob to " + output);
+                manifest.Config.Digest = digestConfig;
+            });
+
+            var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
+            Parallel.Invoke(options, listOfActions.ToArray());
+
+            Console.WriteLine("Pushing new manifest to " + output + ":" + output.Tag);
+            await outputClient.CreateManifestAsync(outputClient, output.Tag, manifest);
+
+            Console.WriteLine("Successfully created " + output + ":" + output.Tag);
+        }
+
+
+        private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo, AzureContainerRegistryClient client, CancellationToken ct)
+        {
+
+            // 1. Upload the .Net files to the specified repository
+            var oras = new OrasPush() {
+                Registry = outputRepo.Registry,
+                Tag = outputRepo.Tag,
+                Repository = outputRepo.Repository,
+                PublishDir = fileOrigin
+            };
+
+            if (!oras.Execute())
+                throw new Exception("Could not upload " + fileOrigin);
+
+            // 2. Acquire the resulting OCI manifest
+            string orasDigest = ""; // TODO
+            OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json", ct);
+            long app_size = (long)manifest.Layers[0].Size;
+            string app_diff_id = manifest.Annotations.digest;
+            string app_digest = manifest.Layers[0].Digest;
+
+            // 3. Acquire base for .Net image
+
+            // 4. Acquire config blob from base
+
+            // 5. Add layer to config blob 
+
+            // 6. Modify manifest file for the new layer
+
+            // 7. Move base layers to repo
+
+            // 8. Upload config blob
+
+            // 9. Push new manifest
+
+            // Image can now be run!
+
+
+            var listOfActions = new List<Action>();
+
+            // Acquire and upload all layers
+            for (int i = 0; i < manifest.Layers.Count; i++)
+            {
+                var cur = i;
+                listOfActions.Add(() =>
+                {
+                    var progress = new ProgressBar(3);
+                    progress.Refresh(0, "Starting");
+                    var layer = client.GetBlobAsync(origin, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
+                    progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
+                    string digestLayer = UploadLayer(layer, output, client).GetAwaiter().GetResult();
+                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output);
+                    manifest.Layers[cur].Digest = digestLayer;
+                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output);
+                });
+            }
+
+            // Acquire config Blob
+            listOfActions.Add(() =>
+            {
+                var progress = new ProgressBar(3);
+                progress.Next("Downloading config blob from " + origin);
+                var configBlob = client.GetBlobAsync(origin, manifest.Config.Digest).GetAwaiter().GetResult();
+                progress.Next("Uploading config blob to " + output);
+                string digestConfig = UploadLayer(configBlob, output, client).GetAwaiter().GetResult();
+                progress.Next("Uploaded config blob to " + output);
+                manifest.Config.Digest = digestConfig;
+            });
+
+            var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
+            Parallel.Invoke(options, listOfActions.ToArray());
+
+            Console.WriteLine("Pushing new manifest to " + output + ":" + outputTag);
+            await client.CreateManifestAsync(output, outputTag, manifest, ct);
+
+            Console.WriteLine("Successfully created " + output + ":" + outputTag);
+        }
+
 
         /// <summary>
         /// Upload a layer using the nextLink properties internally. Very clean and simple to use overall.
