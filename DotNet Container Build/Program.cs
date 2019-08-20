@@ -11,37 +11,44 @@ using System.Collections.Generic;
 
 namespace DotNet_Container_Build
 {
+    /// <summary>
+    /// Sample application demonstrating the ability to download all layers for an image and use them to 
+    /// create a new Repository.
+    /// </summary>
     class Program
     {
-        const string USERNAME = "csharpsdkblobtest";
-        const string PASSWORD = "YIn=nAEVom8eRkZPT4wEQ4PL5O4oSiiX";
-        const string REGISTRY = "csharpsdkblobtest.azurecr.io";
-        const string REPO_ORIGIN = "jenkins";
-        const string REPO_OUTPUT = "jenkins9";
-        const string OUTPUT_TAG = "latest";
-        const int MAX_PARALLEL = 4;
+        const string Username = "csharpsdkblobtest";
+        const string Password = "YIn=nAEVom8eRkZPT4wEQ4PL5O4oSiiX";
+        const string Registry = "csharpsdkblobtest.azurecr.io";
+        const string RepoOrigin = "jenkins";
+        const string RepoOutput = "jenkins9";
+        const string OutputTag = "latest";
+        const int MaxParallel = 4;
 
         static void Main()
         {
             int timeoutInMilliseconds = 1500000;
             CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
             AzureContainerRegistryClient client = LoginBasic(ct);
-            BuildImageInRepoAfterDownload(REPO_ORIGIN, REPO_OUTPUT, OUTPUT_TAG, client, ct).GetAwaiter().GetResult();
+            BuildImageInRepoAfterDownload(RepoOrigin, RepoOutput, OutputTag, client, ct).GetAwaiter().GetResult();
         }
 
-        /* Example Credentials provisioning: */
+        /// <summary>
+        /// Example Credentials provisioning (Using Basic Authentication)
+        /// </summary>
         private static AzureContainerRegistryClient LoginBasic(CancellationToken ct)
         {
-            AcrClientCredentials credentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, REGISTRY, USERNAME, PASSWORD, ct);
+            AcrClientCredentials credentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, Registry, Username, Password, ct);
             AzureContainerRegistryClient client = new AzureContainerRegistryClient(credentials)
             {
                 LoginUri = "https://csharpsdkblobtest.azurecr.io"
-
             };
             return client;
         }
 
-        //Uploads a Hello world image part by part using stream downloaded and then upload for example purposes
+        /// <summary>
+        /// Uploads a specified image layer by layer from another local repository (Within the specific registry)
+        /// </summary>
         private static async Task BuildImageInRepoAfterDownload(string origin, string output, string outputTag, AzureContainerRegistryClient client, CancellationToken ct)
         {
             V2Manifest manifest = (V2Manifest)await client.GetManifestAsync(origin, outputTag, "application/vnd.docker.distribution.manifest.v2+json", ct);
@@ -77,7 +84,7 @@ namespace DotNet_Container_Build
                 manifest.Config.Digest = digestConfig;
             });
 
-            var options = new ParallelOptions { MaxDegreeOfParallelism = MAX_PARALLEL };
+            var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
             Parallel.Invoke(options, listOfActions.ToArray());
 
             Console.WriteLine("Pushing new manifest to " + output + ":" + outputTag);
@@ -86,7 +93,9 @@ namespace DotNet_Container_Build
             Console.WriteLine("Successfully created " + output + ":" + outputTag);
         }
 
-        // Upload a layer using the nextLink properties internally. Very clean and simple to use overall.
+        /// <summary>
+        /// Upload a layer using the nextLink properties internally. Very clean and simple to use overall.
+        /// </summary>
         private static async Task<string> UploadLayer(Stream blob, string repo, AzureContainerRegistryClient client)
         {
             // Make copy to obtain the ability to rewind the stream
@@ -103,13 +112,15 @@ namespace DotNet_Container_Build
             return digest;
         }
 
-
         struct BlobData
         {
             public bool noUpload;
             public string state;
         }
 
+        /// <summary>
+        /// Computes a digest for a particular layer from its stream
+        /// </summary>
         private static string ComputeDigest(Stream s)
         {
             s.Position = 0;
