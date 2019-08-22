@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using MSBuildTasks;
 using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
+using Newtonsoft.Json;
 
 namespace DotNet_Container_Build
 {
@@ -103,13 +104,31 @@ namespace DotNet_Container_Build
             Console.WriteLine("Successfully created " + output + ":" + outputTag);
         }
 
-        private static async Task CopyBaseImageLayers(ImageRef origin, ImageRef output)
+        private static async Task CopyBaseImageLayers(ImageRef origin, ImageRef output, bool includeConfig)
         {
-            var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, origin.Registry, origin.Username, origin.Password);
-            var outputClient = new AzureContainerRegistryClient(originCredentials);
+            AzureContainerRegistryClient originClient;
+            if (string.IsNullOrEmpty(origin.Username))
+            {
+                var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, origin.Registry, origin.Username, origin.Password);
+                originClient = new AzureContainerRegistryClient(originCredentials)
+                {
+                    LoginUri = origin.Registry
+                };
+            }
+            else {
+                originClient = new AzureContainerRegistryClient(new TokenCredentials())
+                {
+                    LoginUri = origin.Registry
+                };
+            }
+ 
+
+            var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, output.Registry, output.Username, output.Password);
+            var outputClient = new AzureContainerRegistryClient(outputCredentials) {
+                LoginUri = output.Registry
+            };
 
             V2Manifest manifest = (V2Manifest) await outputClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
-
             var listOfActions = new List<Action>();
 
             // Acquire and upload all layers
@@ -123,23 +142,25 @@ namespace DotNet_Container_Build
                     var layer = originClient.GetBlobAsync(origin.Repository, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
                     progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
                     string digestLayer = UploadLayer(layer, output.Repository, outputClient).GetAwaiter().GetResult();
-                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output);
+                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output.Repository);
                     manifest.Layers[cur].Digest = digestLayer;
-                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output);
+                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output.Repository);
                 });
             }
 
-            // Acquire config Blob
-            listOfActions.Add(() =>
-            {
-                var progress = new ProgressBar(3);
-                progress.Next("Downloading config blob from " + origin.Repository);
-                var configBlob = originClient.GetBlobAsync(origin.Repository, manifest.Config.Digest).GetAwaiter().GetResult();
-                progress.Next("Uploading config blob to " + output.Repository);
-                string digestConfig = UploadLayer(configBlob, output.Repository, outputClient).GetAwaiter().GetResult();
-                progress.Next("Uploaded config blob to " + output);
-                manifest.Config.Digest = digestConfig;
-            });
+            if (includeConfig) {
+                // Acquire config Blob
+                listOfActions.Add(() =>
+                {
+                    var progress = new ProgressBar(3);
+                    progress.Next("Downloading config blob from " + origin.Repository);
+                    var configBlob = originClient.GetBlobAsync(origin.Repository, manifest.Config.Digest).GetAwaiter().GetResult();
+                    progress.Next("Uploading config blob to " + output.Repository);
+                    string digestConfig = UploadLayer(configBlob, output.Repository, outputClient).GetAwaiter().GetResult();
+                    progress.Next("Uploaded config blob to " + output);
+                    manifest.Config.Digest = digestConfig;
+                });
+            }
 
             var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
             Parallel.Invoke(options, listOfActions.ToArray());
@@ -149,7 +170,6 @@ namespace DotNet_Container_Build
 
             Console.WriteLine("Successfully created " + output + ":" + output.Tag);
         }
-
 
         private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo)
         {
@@ -165,20 +185,22 @@ namespace DotNet_Container_Build
             if (!oras.Execute())
                 throw new Exception("Could not upload " + fileOrigin);
 
+            var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
+            var client = new AzureContainerRegistryClient(clientCredentials)
+            {
+                LoginUri = outputRepo.Registry
+            };
+
             // 2. Acquire the resulting OCI manifest
             string orasDigest = ""; // TODO
-            OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json", ct);
+            OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
             long app_size = (long)manifest.Layers[0].Size;
             string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
             string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
 
-            var baseClient = new AzureContainerRegistryClient(new TokenCredentials());
-            var mcrRegistry = new Registry(new Uri("https://mcr.microsoft.com"));
-            var registryUri = new UriBuilder("https", registry).Uri;
-            var registryInstance = new Registry(registryUri, username, password);
-            var output = new ImageRef(){
+            var baseLayers = new ImageRef(){
                 Registry = "https://mcr.microsoft.com"
             };
 
@@ -186,79 +208,50 @@ namespace DotNet_Container_Build
             switch (dotnetVersion)
             {
                 case "2.1":
-                    output.Repository = "dotnet/core/runtime";
-                    output.Tag = "2.1";
+                    baseLayers.Repository = "dotnet/core/runtime";
+                    baseLayers.Tag = "2.1";
                     break;
                 case "2.2":
-                    output.Repository = "dotnet/core/runtime";
-                    output.Tag = "2.2";
+                    baseLayers.Repository = "dotnet/core/runtime";
+                    baseLayers.Tag = "2.2";
                     break;
                 case "3.0":
-                    output.Repository = "dotnet/core-nightly/runtime";
-                    output.Tag = "3.0";
+                    baseLayers.Repository = "dotnet/core-nightly/runtime";
+                    baseLayers.Tag = "3.0";
                     break;
                 default:
-                    output.Repository = "dotnet/core-nightly/runtime-deps";
-                    output.Tag = "latest";
+                    baseLayers.Repository = "dotnet/core-nightly/runtime-deps";
+                    baseLayers.Tag = "latest";
                     break;
             }
 
+            // 4. Move base layers to repo
+            await CopyBaseImageLayers(baseLayers, outputRepo, false);
 
-            // 7. Move base layers to repo
+            // 5. Acquire config blob from base
+            var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
+            {
+                LoginUri = baseLayers.Registry
+            };
 
-            // 4. Acquire config blob from base
+            V2Manifest baseManifest = (V2Manifest) await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+            var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, manifest.Config.Digest);
 
-            // 5. Add layer to config blob 
+            using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
+            {
+                dynamic configJson = JsonConvert.DeserializeObject(reader.ReadToEnd());
+                // 6. Add layer to config blob 
 
-            // 6. Modify manifest file for the new layer
+            }
+
+            // 7. Modify manifest file for the new layer
 
             // 8. Upload config blob
 
             // 9. Push new manifest
 
             // Image can now be run!
-
-
-            var listOfActions = new List<Action>();
-
-            // Acquire and upload all layers
-            for (int i = 0; i < manifest.Layers.Count; i++)
-            {
-                var cur = i;
-                listOfActions.Add(() =>
-                {
-                    var progress = new ProgressBar(3);
-                    progress.Refresh(0, "Starting");
-                    var layer = client.GetBlobAsync(origin, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
-                    progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
-                    string digestLayer = UploadLayer(layer, output, client).GetAwaiter().GetResult();
-                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output);
-                    manifest.Layers[cur].Digest = digestLayer;
-                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output);
-                });
-            }
-
-            // Acquire config Blob
-            listOfActions.Add(() =>
-            {
-                var progress = new ProgressBar(3);
-                progress.Next("Downloading config blob from " + origin);
-                var configBlob = client.GetBlobAsync(origin, manifest.Config.Digest).GetAwaiter().GetResult();
-                progress.Next("Uploading config blob to " + output);
-                string digestConfig = UploadLayer(configBlob, output, client).GetAwaiter().GetResult();
-                progress.Next("Uploaded config blob to " + output);
-                manifest.Config.Digest = digestConfig;
-            });
-
-            var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
-            Parallel.Invoke(options, listOfActions.ToArray());
-
-            Console.WriteLine("Pushing new manifest to " + output + ":" + outputTag);
-            await client.CreateManifestAsync(output, outputTag, manifest, ct);
-
-            Console.WriteLine("Successfully created " + output + ":" + outputTag);
         }
-
 
         /// <summary>
         /// Upload a layer using the nextLink properties internally. Very clean and simple to use overall.
