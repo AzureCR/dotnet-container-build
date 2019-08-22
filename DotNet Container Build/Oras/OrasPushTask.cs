@@ -1,5 +1,6 @@
 using Microsoft.Build.Framework;
 using System.Diagnostics;
+using System.IO;
 
 namespace MSBuildTasks
 {
@@ -20,18 +21,31 @@ namespace MSBuildTasks
         [Required]
         public string Tag { get; set; }
 
+        public string digest { get; set; }
+
         public override bool Execute()
         {
             Log.LogMessage(MessageImportance.High, PublishDir);
 
             var psi = new ProcessStartInfo(fileName: OrasExe,
-                                           arguments: $"-p {PublishDir} -h {Registry} -r {Repository} -t {Tag}");
+                                           arguments: $" push {Registry}.azurecr.io/{Repository}:{Tag} {PublishDir}");
 
             psi.RedirectStandardOutput = true;
             using (var proc = Process.Start(psi))
             {
                 proc.WaitForExit();
-                Log.LogMessage(MessageImportance.High, proc.StandardOutput.ReadToEnd());
+                string output = proc.StandardOutput.ReadToEnd();
+                using (StringReader sr = new StringReader(output))
+                {
+                    string line;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        if (line.StartsWith("Digest")) {
+                            digest = line.Substring(line.IndexOf("sha256"));
+                        }
+
+                    }
+                }
             }
             return true;
         }

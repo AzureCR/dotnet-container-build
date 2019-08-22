@@ -192,7 +192,7 @@ namespace DotNet_Container_Build
             };
 
             // 2. Acquire the resulting OCI manifest
-            string orasDigest = ""; // TODO
+            string orasDigest = oras.digest; // TODO
             OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
             long app_size = (long)manifest.Layers[0].Size;
             string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
