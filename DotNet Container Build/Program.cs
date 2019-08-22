@@ -41,7 +41,15 @@ namespace DotNet_Container_Build
             int timeoutInMilliseconds = 1500000;
             CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
             AzureContainerRegistryClient client = LoginBasic(ct);
-            BuildImageInRepoAfterDownload(RepoOrigin, RepoOutput, OutputTag, client, ct).GetAwaiter().GetResult();
+            var output = new ImageRef()
+            {
+                Registry = Registry,
+                Password = Password,
+                Repository = "idk",
+                Tag = "Latest"
+            };
+            BuildDotNetImage(".",output).GetAwaiter().GetResult();
+            //BuildImageInRepoAfterDownload(RepoOrigin, RepoOutput, OutputTag, client, ct).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -118,14 +126,14 @@ namespace DotNet_Container_Build
             else {
                 originClient = new AzureContainerRegistryClient(new TokenCredentials())
                 {
-                    LoginUri = origin.Registry
+                    LoginUri = "https://" + origin.Registry
                 };
             }
  
 
             var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, output.Registry, output.Username, output.Password);
             var outputClient = new AzureContainerRegistryClient(outputCredentials) {
-                LoginUri = output.Registry
+                LoginUri = "https://" + output.Registry
             };
 
             V2Manifest manifest = (V2Manifest) await outputClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
@@ -176,6 +184,7 @@ namespace DotNet_Container_Build
 
             // 1. Upload the .Net files to the specified repository
             var oras = new OrasPush() {
+                OrasExe = "C:/ProgramData/Fish/Barrel/oras/0.6.0/oras.exe",
                 Registry = outputRepo.Registry,
                 Tag = outputRepo.Tag,
                 Repository = outputRepo.Repository,
@@ -188,11 +197,11 @@ namespace DotNet_Container_Build
             var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
             var client = new AzureContainerRegistryClient(clientCredentials)
             {
-                LoginUri = outputRepo.Registry
+                LoginUri = "https://" + outputRepo.Registry
             };
 
             // 2. Acquire the resulting OCI manifest
-            string orasDigest = oras.digest; // TODO
+            string orasDigest = oras.digest;
             OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
             long app_size = (long)manifest.Layers[0].Size;
             string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
@@ -231,7 +240,7 @@ namespace DotNet_Container_Build
             // 5. Acquire config blob from base
             var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
             {
-                LoginUri = baseLayers.Registry
+                LoginUri = "https://" + baseLayers.Registry
             };
 
             V2Manifest baseManifest = (V2Manifest) await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
@@ -298,5 +307,6 @@ namespace DotNet_Container_Build
             return "sha256:" + sb.ToString();
 
         }
+
     }
 }

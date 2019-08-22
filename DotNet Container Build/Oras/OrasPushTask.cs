@@ -25,10 +25,8 @@ namespace MSBuildTasks
 
         public override bool Execute()
         {
-            Log.LogMessage(MessageImportance.High, PublishDir);
-
             var psi = new ProcessStartInfo(fileName: OrasExe,
-                                           arguments: $" push {Registry}.azurecr.io/{Repository}:{Tag} {PublishDir}");
+                                           arguments: $"push {Registry}/{Repository}:{Tag} {PublishDir}");
 
             psi.RedirectStandardOutput = true;
             using (var proc = Process.Start(psi))
