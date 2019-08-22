@@ -2,13 +2,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using Microsoft.Azure.ContainerRegistry;
-using Microsoft.Azure.ContainerRegistry.Models;
 using System.IO;
 using System.Threading.Tasks;
 using Konsole;
 using System.Collections.Generic;
 using MSBuildTasks;
+using Microsoft.Azure.ContainerRegistry;
+using Microsoft.Azure.ContainerRegistry.Models;
 
 namespace DotNet_Container_Build
 {
@@ -105,10 +105,10 @@ namespace DotNet_Container_Build
 
         private static async Task CopyBaseImageLayers(ImageRef origin, ImageRef output)
         {
-            AzureContainerRegistryClient originClient = new AzureContainerRegistryClient();
-            AzureContainerRegistryClient outputClient = new AzureContainerRegistryClient();
+            var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, origin.Registry, origin.Username, origin.Password);
+            var outputClient = new AzureContainerRegistryClient(originCredentials);
 
-            V2Manifest manifest = (V2Manifest)await originClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+            V2Manifest manifest = (V2Manifest) await outputClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
 
             var listOfActions = new List<Action>();
 
@@ -145,13 +145,13 @@ namespace DotNet_Container_Build
             Parallel.Invoke(options, listOfActions.ToArray());
 
             Console.WriteLine("Pushing new manifest to " + output + ":" + output.Tag);
-            await outputClient.CreateManifestAsync(outputClient, output.Tag, manifest);
+            await outputClient.CreateManifestAsync(output.Repository, output.Tag, manifest);
 
             Console.WriteLine("Successfully created " + output + ":" + output.Tag);
         }
 
 
-        private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo, AzureContainerRegistryClient client, CancellationToken ct)
+        private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo)
         {
 
             // 1. Upload the .Net files to the specified repository
@@ -169,18 +169,48 @@ namespace DotNet_Container_Build
             string orasDigest = ""; // TODO
             OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json", ct);
             long app_size = (long)manifest.Layers[0].Size;
-            string app_diff_id = manifest.Annotations.digest;
+            string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
             string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
+
+            var baseClient = new AzureContainerRegistryClient(new TokenCredentials());
+            var mcrRegistry = new Registry(new Uri("https://mcr.microsoft.com"));
+            var registryUri = new UriBuilder("https", registry).Uri;
+            var registryInstance = new Registry(registryUri, username, password);
+            var output = new ImageRef(){
+                Registry = "https://mcr.microsoft.com"
+            };
+
+            var dotnetVersion = "2.2";
+            switch (dotnetVersion)
+            {
+                case "2.1":
+                    output.Repository = "dotnet/core/runtime";
+                    output.Tag = "2.1";
+                    break;
+                case "2.2":
+                    output.Repository = "dotnet/core/runtime";
+                    output.Tag = "2.2";
+                    break;
+                case "3.0":
+                    output.Repository = "dotnet/core-nightly/runtime";
+                    output.Tag = "3.0";
+                    break;
+                default:
+                    output.Repository = "dotnet/core-nightly/runtime-deps";
+                    output.Tag = "latest";
+                    break;
+            }
+
+
+            // 7. Move base layers to repo
 
             // 4. Acquire config blob from base
 
             // 5. Add layer to config blob 
 
             // 6. Modify manifest file for the new layer
-
-            // 7. Move base layers to repo
 
             // 8. Upload config blob
 
