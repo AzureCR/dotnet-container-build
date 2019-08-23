@@ -10,6 +10,7 @@ using MSBuildTasks;
 using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
 using Newtonsoft.Json;
+using QuickType;
 
 namespace DotNet_Container_Build
 {
@@ -207,9 +208,10 @@ namespace DotNet_Container_Build
             // 2. Acquire the resulting OCI manifest
             string orasDigest = oras.digest;
             ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
-            // long app_size = (long)manifest.Layers[0].Size;
-            // string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
-            // string app_digest = manifest.Layers[0].Digest;
+
+            long app_size = (long)manifest.Layers[0].Size;
+            string appDiffId = (string) manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
+            string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
 
@@ -240,25 +242,46 @@ namespace DotNet_Container_Build
 
             // 4. Move base layers to repo
             await CopyBaseImageLayers(baseLayers, outputRepo, true);
-
             // 5. Acquire config blob from base
             var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
             {
-                LoginUri = "https://" + baseLayers.Registry
+                LoginUri = "https://" + baseLayers.Registry 
+
             };
 
-            V2Manifest baseManifest = (V2Manifest) await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+            ManifestWrapper baseManifest = await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
             var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, baseManifest.Config.Digest);
 
+            long appConfigSize;
+            string appConfigDigest;
+
+            // 6. Add layer to config blob 
             using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
             {
-                dynamic configJson = JsonConvert.DeserializeObject(reader.ReadToEnd());
-                // 6. Add layer to config blob 
+                var config = JsonConvert.DeserializeObject<ConfigBlob>(reader.ReadToEnd());
+                config.Rootfs.DiffIds.Add(appDiffId);
+                string serialized = JsonConvert.SerializeObject(config, Formatting.None);
+                appConfigSize = System.Text.ASCIIEncoding.ASCII.GetByteCount(serialized);
+                appConfigDigest = ComputeDigest(serialized);
+                await UploadLayer(GenerateStreamFromString(serialized), outputRepo.Repository, client);
+                // Upload config blob
 
             }
 
             // 7. Modify manifest file for the new layer
+            var newManifest = (OCIManifest)baseManifest;
+            newManifest.Config.Size = appConfigSize;
+            newManifest.Config.Digest = appConfigDigest;
+            var newLayer = new Descriptor()
+            {
+                MediaType = "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                Size = app_size,
+                Digest = app_digest
+            };
 
+            newManifest.Layers.Add(newLayer);
+
+            await client.CreateManifestAsync(outputRepo.Repository,outputRepo.Tag, newManifest);
             // 8. Upload config blob
 
             // 9. Push new manifest
@@ -310,6 +333,33 @@ namespace DotNet_Container_Build
 
             return "sha256:" + sb.ToString();
 
+        }
+
+        private static string ComputeDigest(string s)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            using (var hash = SHA256.Create())
+            {
+                Encoding enc = Encoding.Unicode;
+                Byte[] result = hash.ComputeHash(Encoding.ASCII.GetBytes(s));
+
+                foreach (Byte b in result)
+                    sb.Append(b.ToString("x2"));
+            }
+
+            return "sha256:" + sb.ToString();
+
+        }
+
+        public static Stream GenerateStreamFromString(string s)
+        {
+            var stream = new MemoryStream();
+            var writer = new StreamWriter(stream);
+            writer.Write(s);
+            writer.Flush();
+            stream.Position = 0;
+            return stream;
         }
 
     }
