@@ -40,15 +40,21 @@ namespace DotNet_Container_Build
         {
             int timeoutInMilliseconds = 1500000;
             CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
-            AzureContainerRegistryClient client = LoginBasic(ct);
             var output = new ImageRef()
             {
                 Registry = Registry,
+                Username = Username,
                 Password = Password,
                 Repository = "idk",
-                Tag = "Latest"
+                Tag = "latest"
             };
-            BuildDotNetImage(".",output).GetAwaiter().GetResult();
+            try
+            {
+                BuildDotNetImage(".", output).GetAwaiter().GetResult();
+            }
+            catch (Exception e) {
+                Console.WriteLine(e);
+            }
             //BuildImageInRepoAfterDownload(RepoOrigin, RepoOutput, OutputTag, client, ct).GetAwaiter().GetResult();
         }
 
@@ -115,7 +121,7 @@ namespace DotNet_Container_Build
         private static async Task CopyBaseImageLayers(ImageRef origin, ImageRef output, bool includeConfig)
         {
             AzureContainerRegistryClient originClient;
-            if (string.IsNullOrEmpty(origin.Username))
+            if (!string.IsNullOrEmpty(origin.Username))
             {
                 var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, origin.Registry, origin.Username, origin.Password);
                 originClient = new AzureContainerRegistryClient(originCredentials)
@@ -136,7 +142,7 @@ namespace DotNet_Container_Build
                 LoginUri = "https://" + output.Registry
             };
 
-            V2Manifest manifest = (V2Manifest) await outputClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+            V2Manifest manifest = (V2Manifest) await originClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
             var listOfActions = new List<Action>();
 
             // Acquire and upload all layers
@@ -172,11 +178,6 @@ namespace DotNet_Container_Build
 
             var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
             Parallel.Invoke(options, listOfActions.ToArray());
-
-            Console.WriteLine("Pushing new manifest to " + output + ":" + output.Tag);
-            await outputClient.CreateManifestAsync(output.Repository, output.Tag, manifest);
-
-            Console.WriteLine("Successfully created " + output + ":" + output.Tag);
         }
 
         private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo)
@@ -188,13 +189,16 @@ namespace DotNet_Container_Build
                 Registry = outputRepo.Registry,
                 Tag = outputRepo.Tag,
                 Repository = outputRepo.Repository,
-                PublishDir = fileOrigin
+                PublishDir = fileOrigin,
+                Username = outputRepo.Username,
+                Password = outputRepo.Password
+             
             };
 
             if (!oras.Execute())
                 throw new Exception("Could not upload " + fileOrigin);
 
-            var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
+            var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
             var client = new AzureContainerRegistryClient(clientCredentials)
             {
                 LoginUri = "https://" + outputRepo.Registry
@@ -202,15 +206,15 @@ namespace DotNet_Container_Build
 
             // 2. Acquire the resulting OCI manifest
             string orasDigest = oras.digest;
-            OCIManifest manifest = (OCIManifest)await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
-            long app_size = (long)manifest.Layers[0].Size;
-            string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
-            string app_digest = manifest.Layers[0].Digest;
+            ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
+            // long app_size = (long)manifest.Layers[0].Size;
+            // string app_diff_id = (string) manifest.Annotations.AdditionalProperties["Digest"];
+            // string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
 
             var baseLayers = new ImageRef(){
-                Registry = "https://mcr.microsoft.com"
+                Registry = "mcr.microsoft.com"
             };
 
             var dotnetVersion = "2.2";
@@ -235,7 +239,7 @@ namespace DotNet_Container_Build
             }
 
             // 4. Move base layers to repo
-            await CopyBaseImageLayers(baseLayers, outputRepo, false);
+            await CopyBaseImageLayers(baseLayers, outputRepo, true);
 
             // 5. Acquire config blob from base
             var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
@@ -244,7 +248,7 @@ namespace DotNet_Container_Build
             };
 
             V2Manifest baseManifest = (V2Manifest) await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
-            var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, manifest.Config.Digest);
+            var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, baseManifest.Config.Digest);
 
             using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
             {

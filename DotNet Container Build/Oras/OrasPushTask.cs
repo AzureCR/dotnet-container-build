@@ -21,12 +21,18 @@ namespace MSBuildTasks
         [Required]
         public string Tag { get; set; }
 
+        [Required]
+        public string Username { get; set; }
+
+        [Required]
+        public string Password { get; set; }
+
         public string digest { get; set; }
 
         public override bool Execute()
         {
             var psi = new ProcessStartInfo(fileName: OrasExe,
-                                           arguments: $"push {Registry}/{Repository}:{Tag} {PublishDir}");
+                                           arguments: $"push  -u {Username} -p {Password} {Registry}/{Repository}:{Tag} {PublishDir}");
 
             psi.RedirectStandardOutput = true;
             using (var proc = Process.Start(psi))
