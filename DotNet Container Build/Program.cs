@@ -46,7 +46,7 @@ namespace DotNet_Container_Build
                 Registry = Registry,
                 Username = Username,
                 Password = Password,
-                Repository = "idk",
+                Repository = "repobuild",
                 Tag = "latest"
             };
             try
@@ -268,7 +268,7 @@ namespace DotNet_Container_Build
             }
 
             // 7. Modify manifest file for the new layer
-            var newManifest = (OCIManifest)baseManifest;
+            var newManifest = baseManifest;
             newManifest.Config.Size = appConfigSize;
             newManifest.Config.Digest = appConfigDigest;
             var newLayer = new Descriptor()

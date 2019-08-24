@@ -32,7 +32,7 @@ namespace MSBuildTasks
         public override bool Execute()
         {
             var psi = new ProcessStartInfo(fileName: OrasExe,
-                                           arguments: $"push  -u {Username} -p {Password} {Registry}/{Repository}:{Tag} .")
+                                           arguments: $"push -u {Username} -p {Password} {Registry}/{Repository}:{Tag} .")
             {
                 WorkingDirectory = PublishDir
             };
