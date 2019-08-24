@@ -11,6 +11,7 @@ using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
 using Newtonsoft.Json;
 using QuickType;
+using System.Text.Json;
 
 namespace DotNet_Container_Build
 {
@@ -27,7 +28,6 @@ namespace DotNet_Container_Build
         const string RepoOutput = "jenkins9";
         const string OutputTag = "latest";
         const int MaxParallel = 4;
-
         struct ImageRef
         {
             public string Registry { get; set; }
@@ -51,12 +51,11 @@ namespace DotNet_Container_Build
             };
             try
             {
-                BuildDotNetImage(".", output).GetAwaiter().GetResult();
+                BuildDotNetImage("C:/Users/t-esre/Documents/GitHub/azure-cr/dotnet-oci/samples/helloworld", output).GetAwaiter().GetResult();
             }
             catch (Exception e) {
                 Console.WriteLine(e);
             }
-            //BuildImageInRepoAfterDownload(RepoOrigin, RepoOutput, OutputTag, client, ct).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -124,7 +123,7 @@ namespace DotNet_Container_Build
             AzureContainerRegistryClient originClient;
             if (!string.IsNullOrEmpty(origin.Username))
             {
-                var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, origin.Registry, origin.Username, origin.Password);
+                var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, origin.Registry, origin.Username, origin.Password);
                 originClient = new AzureContainerRegistryClient(originCredentials)
                 {
                     LoginUri = origin.Registry
@@ -138,7 +137,7 @@ namespace DotNet_Container_Build
             }
  
 
-            var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.TokenAuth, output.Registry, output.Username, output.Password);
+            var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, output.Registry, output.Username, output.Password);
             var outputClient = new AzureContainerRegistryClient(outputCredentials) {
                 LoginUri = "https://" + output.Registry
             };
@@ -158,7 +157,6 @@ namespace DotNet_Container_Build
                     progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
                     string digestLayer = UploadLayer(layer, output.Repository, outputClient).GetAwaiter().GetResult();
                     progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output.Repository);
-                    manifest.Layers[cur].Digest = digestLayer;
                     progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output.Repository);
                 });
             }
@@ -173,7 +171,6 @@ namespace DotNet_Container_Build
                     progress.Next("Uploading config blob to " + output.Repository);
                     string digestConfig = UploadLayer(configBlob, output.Repository, outputClient).GetAwaiter().GetResult();
                     progress.Next("Uploaded config blob to " + output);
-                    manifest.Config.Digest = digestConfig;
                 });
             }
 
@@ -258,14 +255,16 @@ namespace DotNet_Container_Build
             // 6. Add layer to config blob 
             using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
             {
-                var config = JsonConvert.DeserializeObject<ConfigBlob>(reader.ReadToEnd());
+                string originalBlob = reader.ReadToEnd();
+                var nah = System.Text.Encoding.UTF8.GetByteCount(originalBlob);
+
+                var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
                 config.Rootfs.DiffIds.Add(appDiffId);
                 string serialized = JsonConvert.SerializeObject(config, Formatting.None);
-                appConfigSize = System.Text.ASCIIEncoding.ASCII.GetByteCount(serialized);
+                appConfigSize = Encoding.UTF8.GetByteCount(serialized);
                 appConfigDigest = ComputeDigest(serialized);
                 await UploadLayer(GenerateStreamFromString(serialized), outputRepo.Repository, client);
                 // Upload config blob
-
             }
 
             // 7. Modify manifest file for the new layer
@@ -324,7 +323,6 @@ namespace DotNet_Container_Build
 
             using (var hash = SHA256.Create())
             {
-                Encoding enc = Encoding.Unicode;
                 Byte[] result = hash.ComputeHash(s);
 
                 foreach (Byte b in result)
@@ -341,8 +339,8 @@ namespace DotNet_Container_Build
 
             using (var hash = SHA256.Create())
             {
-                Encoding enc = Encoding.Unicode;
-                Byte[] result = hash.ComputeHash(Encoding.ASCII.GetBytes(s));
+                Encoding enc = Encoding.UTF8;
+                Byte[] result = hash.ComputeHash(enc.GetBytes(s));
 
                 foreach (Byte b in result)
                     sb.Append(b.ToString("x2"));

@@ -24,7 +24,7 @@ namespace QuickType
         public Conconfig ContainerConfig { get; set; }
 
         [JsonProperty("created")]
-        public DateTimeOffset Created { get; set; }
+        public string Created { get; set; }
 
         [JsonProperty("docker_version")]
         public string DockerVersion { get; set; }
@@ -99,7 +99,7 @@ namespace QuickType
     public partial class History
     {
         [JsonProperty("created")]
-        public DateTimeOffset Created { get; set; }
+        public string Created { get; set; }
 
         [JsonProperty("created_by")]
         public string CreatedBy { get; set; }
@@ -132,11 +132,6 @@ namespace QuickType
         public static readonly JsonSerializerSettings Settings = new JsonSerializerSettings
         {
             MetadataPropertyHandling = MetadataPropertyHandling.Ignore,
-            DateParseHandling = DateParseHandling.None,
-            Converters =
-            {
-                new IsoDateTimeConverter { DateTimeStyles = DateTimeStyles.AssumeUniversal }
-            },
         };
     }
 }
