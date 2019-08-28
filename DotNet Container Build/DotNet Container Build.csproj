@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -8,6 +8,9 @@
 
   <ItemGroup>
     <PackageReference Include="Goblinfactory.Konsole" Version="3.3.0" />
+    <PackageReference Include="Microsoft.Azure.Runtime.ContainerRegistry" Version="2.0.0-dev.20190822.1" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="16.0.461" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="16.0.461" />
     <PackageReference Include="Microsoft.Rest.ClientRuntime.Azure" Version="3.3.19" />
     <PackageReference Include="System.Console" Version="4.3.1" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="5.5.0" />
