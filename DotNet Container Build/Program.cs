@@ -12,109 +12,82 @@ using Microsoft.Azure.ContainerRegistry.Models;
 using Newtonsoft.Json;
 using QuickType;
 using System.Text.Json;
+using CommandLine;
 
 namespace DotNet_Container_Build
 {
+
+    class Options
+    {
+        [Option('u', "username", Required = true, HelpText = "Username for registry")]
+        public string Username { get; set; }
+
+        [Option('p', "passowrd", Required = true, HelpText = "Password for registry")]
+        public string Password { get; set; }
+
+        [Option('r', "Registry", Required = true, HelpText = "Output registry")]
+        public string Registry { get; set; }
+
+        [Option('e', "repository", Required = true, HelpText = "Output repository")]
+        public string Repository { get; set; }
+
+        [Option('t', "tag", Required = false, HelpText = "Tag for repository")]
+        public string Tag { get; set; }
+
+        [Option('f', "foldersrc", Required = true, HelpText = "Input folder with produced .Net dll's")]
+        public string Source { get; set; }
+
+    }
+
     /// <summary>
     /// Sample application demonstrating the ability to download all layers for an image and use them to 
     /// create a new Repository.
     /// </summary>
     class Program
     {
-        const string Username = "csharpsdkblobtest";
-        static string Password = Environment.GetEnvironmentVariable("TEST_PASSWORD");
-        const string Registry = "csharpsdkblobtest.azurecr.io";
-        const string RepoOrigin = "jenkins";
-        const string RepoOutput = "jenkins9";
-        const string OutputTag = "latest";
-        const int MaxParallel = 4;
 
-        static void Main()
+        //public string Username = "csharpsdkblobtest";
+        //public string Password = Environment.GetEnvironmentVariable("TEST_PASSWORD");
+        //public string Registry = "csharpsdkblobtest.azurecr.io";
+
+        //public string Username { get; set; } = "csharpsdkblobtest";
+        //public string Password { get; set; } = Environment.GetEnvironmentVariable("TEST_PASSWORD");
+        //public string Registry { get; set; } = "csharpsdkblobtest.azurecr.io";
+        //public string Repository { get; set; }
+
+        static void Main(string[] args)
         {
-            int timeoutInMilliseconds = 1500000;
-            CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
-            var output = new ImageRef()
-            {
-                Registry = Registry,
-                Username = Username,
-                Password = Password,
-                Repository = "repobuild",
-                Tag = "latest"
-            };
-            try
-            {
-                BuildDotNetImage("C:/Users/t-esre/Documents/GitHub/azure-cr/dotnet-oci/samples/helloworld", output).GetAwaiter().GetResult();
-            }
-            catch (Exception e) {
-                Console.WriteLine(e);
-            }
+            Parser.Default.ParseArguments<Options>(args)
+                   .WithParsed<Options>(options =>
+                   {
+                       CommandLine.Parser.Default.ParseArguments(args);
+                       int timeoutInMilliseconds = 1500000;
+                       CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
+                       var output = new ImageRef()
+                       {
+                           Registry = options.Registry,
+                           Username = options.Username,
+                           Password = options.Password,
+                           Repository = options.Repository,
+                           Tag = options.Tag == null ? "latest" : options.Tag
+                       };
+                       try
+                       {
+                           BuildDotNetImage(options.Source, output).GetAwaiter().GetResult();
+                       }
+                       catch (Exception e)
+                       {
+                           Console.WriteLine(e);
+                       }
+                   });
         }
 
-        /// <summary>
-        /// Example Credentials provisioning (Using Basic Authentication)
-        /// </summary>
-        private static AzureContainerRegistryClient LoginBasic(CancellationToken ct)
-        {
-            AcrClientCredentials credentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, Registry, Username, Password, ct);
-            AzureContainerRegistryClient client = new AzureContainerRegistryClient(credentials)
-            {
-                LoginUri = "https://csharpsdkblobtest.azurecr.io"
-            };
-            return client;
-        }
-
-        /// <summary>
-        /// Uploads a specified image layer by layer from another local repository (Within the specific registry)
-        /// </summary>
-        private static async Task BuildImageInRepoAfterDownload(string origin, string output, string outputTag, AzureContainerRegistryClient client, CancellationToken ct)
-        {
-            V2Manifest manifest = (V2Manifest)await client.GetManifestAsync(origin, outputTag, "application/vnd.docker.distribution.manifest.v2+json", ct);
-
-            var listOfActions = new List<Action>();
-
-            // Acquire and upload all layers
-            for (int i = 0; i < manifest.Layers.Count; i++)
-            {
-                var cur = i;
-                listOfActions.Add(() =>
-                {
-                    var progress = new ProgressBar(3);
-                    progress.Refresh(0, "Starting");
-                    var layer = client.GetBlobAsync(origin, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
-                    progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
-                    string digestLayer = UploadLayer(layer, output, client).GetAwaiter().GetResult();
-                    progress.Next("Uploading " + manifest.Layers[cur].Digest + " layer to " + output);
-                    manifest.Layers[cur].Digest = digestLayer;
-                    progress.Next("Uploaded " + manifest.Layers[cur].Digest + " layer to " + output);
-                });
-            }
-
-            // Acquire config Blob
-            listOfActions.Add(() =>
-            {
-                var progress = new ProgressBar(3);
-                progress.Next("Downloading config blob from " + origin);
-                var configBlob = client.GetBlobAsync(origin, manifest.Config.Digest).GetAwaiter().GetResult();
-                progress.Next("Uploading config blob to " + output);
-                string digestConfig = UploadLayer(configBlob, output, client).GetAwaiter().GetResult();
-                progress.Next("Uploaded config blob to " + output);
-                manifest.Config.Digest = digestConfig;
-            });
-
-            var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
-            Parallel.Invoke(options, listOfActions.ToArray());
-
-            Console.WriteLine("Pushing new manifest to " + output + ":" + outputTag);
-            await client.CreateManifestAsync(output, outputTag, manifest, ct);
-
-            Console.WriteLine("Successfully created " + output + ":" + outputTag);
-        }
-
-        private static async Task BuildDotNetImage (string fileOrigin, ImageRef outputRepo)
+        private static async Task BuildDotNetImage(string fileOrigin, ImageRef outputRepo)
         {
 
             // 1. Upload the .Net files to the specified repository
-            var oras = new OrasPush() {
+            var oras = new OrasPush()
+            {
                 OrasExe = "C:/ProgramData/Fish/Barrel/oras/0.6.0/oras.exe",
                 Registry = outputRepo.Registry,
                 Tag = outputRepo.Tag,
@@ -122,7 +95,7 @@ namespace DotNet_Container_Build
                 PublishDir = fileOrigin,
                 Username = outputRepo.Username,
                 Password = outputRepo.Password
-             
+
             };
 
             if (!oras.Execute())
@@ -139,12 +112,12 @@ namespace DotNet_Container_Build
             ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
 
             long app_size = (long)manifest.Layers[0].Size;
-            string appDiffId = (string) manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
+            string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
             string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
-
-            var baseLayers = new ImageRef(){
+            var baseLayers = new ImageRef()
+            {
                 Registry = "mcr.microsoft.com"
             };
 
@@ -168,14 +141,13 @@ namespace DotNet_Container_Build
                     baseLayers.Tag = "latest";
                     break;
             }
+            var baseLayerManager = new LayerManager(baseLayers);
+            var outputLayerManager = new LayerManager(outputRepo);
+            await baseLayerManager.CopyLayersTo(outputLayerManager, false, true);
 
-            // 4. Move base layers to repo
-            await CopyBaseImageLayers(baseLayers, outputRepo, true);
-            // 5. Acquire config blob from base
             var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
             {
-                LoginUri = "https://" + baseLayers.Registry 
-
+                LoginUri = "https://" + baseLayers.Registry
             };
 
             ManifestWrapper baseManifest = await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
@@ -188,14 +160,12 @@ namespace DotNet_Container_Build
             using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
             {
                 string originalBlob = reader.ReadToEnd();
-                var nah = System.Text.Encoding.UTF8.GetByteCount(originalBlob);
-
                 var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
                 config.Rootfs.DiffIds.Add(appDiffId);
                 string serialized = JsonConvert.SerializeObject(config, Formatting.None);
                 appConfigSize = Encoding.UTF8.GetByteCount(serialized);
                 appConfigDigest = ComputeDigest(serialized);
-                await UploadLayer(GenerateStreamFromString(serialized), outputRepo.Repository, client);
+                await outputLayerManager.UploadLayer(GenerateStreamFromString(serialized));
                 // Upload config blob
             }
 
@@ -211,13 +181,9 @@ namespace DotNet_Container_Build
             };
 
             newManifest.Layers.Add(newLayer);
-
-            await client.CreateManifestAsync(outputRepo.Repository,outputRepo.Tag, newManifest);
-            // 8. Upload config blob
-
-            // 9. Push new manifest
-
-            // Image can now be run!
+            Console.WriteLine("Creating New Manifest");
+            await client.CreateManifestAsync(outputRepo.Repository, outputRepo.Tag, newManifest);
+            Console.WriteLine(outputRepo.Repository + ":" + outputRepo.Tag + " Has been created succesfully");
         }
 
         struct BlobData

@@ -1,20 +1,12 @@
 ﻿using System;
-using System;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
 using System.IO;
 using System.Threading.Tasks;
 using Konsole;
 using System.Collections.Generic;
-using MSBuildTasks;
 using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
-using Newtonsoft.Json;
-using QuickType;
-using System.Text.Json;
-using System.Configuration;
-using System.Runtime.InteropServices;
 
 namespace DotNet_Container_Build
 {
@@ -48,7 +40,7 @@ namespace DotNet_Container_Build
         /// <paramref name="blob"/> Stream containing the blob to be uploaded
         /// the registry. If none is specified the internal default will be used. Included for flexibility.
         /// </summary>
-        private async Task<string> UploadLayer(Stream blob)
+        public async Task<string> UploadLayer(Stream blob)
         {
             // Make copy to obtain the ability to rewind the stream
             Stream cpy = new MemoryStream();
@@ -112,11 +104,11 @@ namespace DotNet_Container_Build
         /// </summary>
         private void DownloadAndUpload(string digest, LayerManager output , bool consoleOutput)
         {
-            var progress = new ProgressBar(2);
+            var progress = new ProgressBar(2, 15);
 
             progress.Refresh(0, "Downloading " + digest + " layer from " + _repository);
             var layer = _client.GetBlobAsync(_repository, digest).GetAwaiter().GetResult();
-
+            
             progress.Next("Uploading " + digest + " layer to " + output._repository);
             string digestLayer = output.UploadLayer(layer).GetAwaiter().GetResult();
 
