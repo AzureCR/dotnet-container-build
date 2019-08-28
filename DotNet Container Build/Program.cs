@@ -46,12 +46,12 @@ namespace DotNet_Container_Build
                 Registry = Registry,
                 Username = Username,
                 Password = Password,
-                Repository = "repobuild",
-                Tag = "latest"
+                Repository = "repobuild5",
+                Tag = "new"
             };
             try
             {
-                BuildDotNetImage("C:/Users/t-esre/Documents/GitHub/azure-cr/dotnet-oci/samples/helloworld", output).GetAwaiter().GetResult();
+                BuildDotNetImage("C:/Users/t-esre/Documents/GitHub/newEmpty/bin/Debug/netcoreapp3.0/publish", output).GetAwaiter().GetResult();
             }
             catch (Exception e) {
                 Console.WriteLine(e);
@@ -64,10 +64,7 @@ namespace DotNet_Container_Build
         private static AzureContainerRegistryClient LoginBasic(CancellationToken ct)
         {
             AcrClientCredentials credentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, Registry, Username, Password, ct);
-            AzureContainerRegistryClient client = new AzureContainerRegistryClient(credentials)
-            {
-                LoginUri = "https://csharpsdkblobtest.azurecr.io"
-            };
+            AzureContainerRegistryClient client = new AzureContainerRegistryClient("https://csharpsdkblobtest.azurecr.io/", credentials);
             return client;
         }
 
@@ -86,7 +83,7 @@ namespace DotNet_Container_Build
                 var cur = i;
                 listOfActions.Add(() =>
                 {
-                    var progress = new ProgressBar(3);
+                    var progress = new ProgressBar(3, 15);
                     progress.Refresh(0, "Starting");
                     var layer = client.GetBlobAsync(origin, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
                     progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
@@ -100,7 +97,7 @@ namespace DotNet_Container_Build
             // Acquire config Blob
             listOfActions.Add(() =>
             {
-                var progress = new ProgressBar(3);
+                var progress = new ProgressBar(3, 15);
                 progress.Next("Downloading config blob from " + origin);
                 var configBlob = client.GetBlobAsync(origin, manifest.Config.Digest).GetAwaiter().GetResult();
                 progress.Next("Uploading config blob to " + output);
@@ -123,24 +120,16 @@ namespace DotNet_Container_Build
             AzureContainerRegistryClient originClient;
             if (!string.IsNullOrEmpty(origin.Username))
             {
-                var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, origin.Registry, origin.Username, origin.Password);
-                originClient = new AzureContainerRegistryClient(originCredentials)
-                {
-                    LoginUri = origin.Registry
-                };
+                var originCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, "https://" + origin.Registry, origin.Username, origin.Password);
+                originClient = new AzureContainerRegistryClient(origin.Registry+"/", originCredentials);
             }
             else {
-                originClient = new AzureContainerRegistryClient(new TokenCredentials())
-                {
-                    LoginUri = "https://" + origin.Registry
-                };
+                originClient = new AzureContainerRegistryClient(origin.Registry, new TokenCredentials());
             }
  
 
-            var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, output.Registry, output.Username, output.Password);
-            var outputClient = new AzureContainerRegistryClient(outputCredentials) {
-                LoginUri = "https://" + output.Registry
-            };
+            var outputCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, output.Registry + "/", output.Username, output.Password);
+            var outputClient = new AzureContainerRegistryClient(output.Registry, outputCredentials);
 
             V2Manifest manifest = (V2Manifest) await originClient.GetManifestAsync(origin.Repository, origin.Tag, "application/vnd.docker.distribution.manifest.v2+json");
             var listOfActions = new List<Action>();
@@ -151,7 +140,7 @@ namespace DotNet_Container_Build
                 var cur = i;
                 listOfActions.Add(() =>
                 {
-                    var progress = new ProgressBar(3);
+                    var progress = new ProgressBar(3,15);
                     progress.Refresh(0, "Starting");
                     var layer = originClient.GetBlobAsync(origin.Repository, manifest.Layers[cur].Digest).GetAwaiter().GetResult();
                     progress.Next("Downloading " + manifest.Layers[cur].Digest + " layer from " + origin);
@@ -165,7 +154,7 @@ namespace DotNet_Container_Build
                 // Acquire config Blob
                 listOfActions.Add(() =>
                 {
-                    var progress = new ProgressBar(3);
+                    var progress = new ProgressBar(3, 15);
                     progress.Next("Downloading config blob from " + origin.Repository);
                     var configBlob = originClient.GetBlobAsync(origin.Repository, manifest.Config.Digest).GetAwaiter().GetResult();
                     progress.Next("Uploading config blob to " + output.Repository);
@@ -196,11 +185,8 @@ namespace DotNet_Container_Build
             if (!oras.Execute())
                 throw new Exception("Could not upload " + fileOrigin);
 
-            var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
-            var client = new AzureContainerRegistryClient(clientCredentials)
-            {
-                LoginUri = "https://" + outputRepo.Registry
-            };
+            var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, outputRepo.Registry + "/", outputRepo.Username, outputRepo.Password);
+            var client = new AzureContainerRegistryClient("https://" + outputRepo.Registry, clientCredentials);
 
             // 2. Acquire the resulting OCI manifest
             string orasDigest = oras.digest;
@@ -216,7 +202,7 @@ namespace DotNet_Container_Build
                 Registry = "mcr.microsoft.com"
             };
 
-            var dotnetVersion = "2.2";
+            var dotnetVersion = "3.0";
             switch (dotnetVersion)
             {
                 case "2.1":
@@ -240,11 +226,7 @@ namespace DotNet_Container_Build
             // 4. Move base layers to repo
             await CopyBaseImageLayers(baseLayers, outputRepo, true);
             // 5. Acquire config blob from base
-            var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
-            {
-                LoginUri = "https://" + baseLayers.Registry 
-
-            };
+            var baseClient = new AzureContainerRegistryClient(baseLayers.Registry, new TokenCredentials());
 
             ManifestWrapper baseManifest = await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
             var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, baseManifest.Config.Digest);
@@ -257,8 +239,8 @@ namespace DotNet_Container_Build
             {
                 string originalBlob = reader.ReadToEnd();
                 var nah = System.Text.Encoding.UTF8.GetByteCount(originalBlob);
-
                 var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
+                config.Config.Cmd = new[]{ "dotnet", "newEmpty.dll"};
                 config.Rootfs.DiffIds.Add(appDiffId);
                 string serialized = JsonConvert.SerializeObject(config, Formatting.None);
                 appConfigSize = Encoding.UTF8.GetByteCount(serialized);
@@ -301,9 +283,9 @@ namespace DotNet_Container_Build
             string digest = ComputeDigest(cpy);
             cpy.Position = 0;
 
-            var uploadInfo = await client.StartEmptyResumableBlobUploadAsync(repo);
-            var uploadedLayer = await client.UploadBlobContentFromNextAsync(cpy, uploadInfo.Location.Substring(1));
-            var uploadedLayerEnd = await client.EndBlobUploadFromNextAsync(digest, uploadedLayer.Location.Substring(1));
+            var uploadInfo = await client.StartBlobUploadAsync(repo);
+            var uploadedLayer = await client.UploadBlobAsync(cpy, uploadInfo.Location.Substring(1));
+            var uploadedLayerEnd = await client.EndBlobUploadAsync(digest, uploadedLayer.Location.Substring(1));
             return digest;
         }
 
