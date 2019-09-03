@@ -4,16 +4,15 @@ using System.Text;
 using System.Threading;
 using System.IO;
 using System.Threading.Tasks;
-using Konsole;
-using System.Collections.Generic;
 using MSBuildTasks;
 using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
 using Newtonsoft.Json;
 using QuickType;
-using System.Text.Json;
 using CommandLine;
-
+using ICSharpCode.SharpZipLib.GZip;
+using ICSharpCode.SharpZipLib.Tar;
+// System.Commandline.Experimental
 namespace DotNet_Container_Build
 {
 
@@ -22,7 +21,7 @@ namespace DotNet_Container_Build
         [Option('u', "username", Required = true, HelpText = "Username for registry")]
         public string Username { get; set; }
 
-        [Option('p', "passowrd", Required = true, HelpText = "Password for registry")]
+        [Option('p', "password", Required = true, HelpText = "Password for registry")]
         public string Password { get; set; }
 
         [Option('r', "Registry", Required = true, HelpText = "Output registry")]
@@ -45,22 +44,11 @@ namespace DotNet_Container_Build
     /// </summary>
     class Program
     {
-
-        //public string Username = "csharpsdkblobtest";
-        //public string Password = Environment.GetEnvironmentVariable("TEST_PASSWORD");
-        //public string Registry = "csharpsdkblobtest.azurecr.io";
-
-        //public string Username { get; set; } = "csharpsdkblobtest";
-        //public string Password { get; set; } = Environment.GetEnvironmentVariable("TEST_PASSWORD");
-        //public string Registry { get; set; } = "csharpsdkblobtest.azurecr.io";
-        //public string Repository { get; set; }
-
         static void Main(string[] args)
         {
             Parser.Default.ParseArguments<Options>(args)
                    .WithParsed<Options>(options =>
                    {
-                       CommandLine.Parser.Default.ParseArguments(args);
                        int timeoutInMilliseconds = 1500000;
                        CancellationToken ct = new CancellationTokenSource(timeoutInMilliseconds).Token;
                        var output = new ImageRef()
@@ -86,20 +74,10 @@ namespace DotNet_Container_Build
         {
 
             // 1. Upload the .Net files to the specified repository
-            var oras = new OrasPush()
-            {
-                OrasExe = "C:/ProgramData/Fish/Barrel/oras/0.6.0/oras.exe",
-                Registry = outputRepo.Registry,
-                Tag = outputRepo.Tag,
-                Repository = outputRepo.Repository,
-                PublishDir = fileOrigin,
-                Username = outputRepo.Username,
-                Password = outputRepo.Password
 
-            };
-
-            if (!oras.Execute())
-                throw new Exception("Could not upload " + fileOrigin);
+            string tempFolder = System.IO.Path.GetTempPath();
+            Tar.CreateFromDirectory(tempFolder + "layer1.tar.gz", fileOrigin);
+            FileStream layer1Read = new FileStream(tempFolder + "layer1.tar.gz", FileMode.Open, FileAccess.ReadWrite,FileShare.Read);
 
             var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
             var client = new AzureContainerRegistryClient(clientCredentials)
@@ -108,11 +86,21 @@ namespace DotNet_Container_Build
             };
 
             // 2. Acquire the resulting OCI manifest
-            string orasDigest = oras.digest;
-            ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
+            string layer1Digest = ComputeDigest(layer1Read);
+            layer1Read.Position = 0;
 
-            long app_size = (long)manifest.Layers[0].Size;
-            string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
+            Stream inStream = File.OpenRead(tempFolder + "layer1.tar.gz");
+            Stream gzipStream = new GZipInputStream(inStream);
+
+            TarArchive tarArchive = TarArchive.CreateInputTarArchive(gzipStream);
+
+            string appDiffId = ComputeDigest(tarArchive);
+            TarOutputStream()
+
+            ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, layer1Digest, "application/vnd.oci.image.manifest.v1+json");
+
+            long app_size = layer1Read.Length;
+            //string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
             string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
@@ -121,7 +109,7 @@ namespace DotNet_Container_Build
                 Registry = "mcr.microsoft.com"
             };
 
-            var dotnetVersion = "2.2";
+            var dotnetVersion = "3.0";
             switch (dotnetVersion)
             {
                 case "2.1":
@@ -161,6 +149,7 @@ namespace DotNet_Container_Build
             {
                 string originalBlob = reader.ReadToEnd();
                 var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
+                config.Config.Cmd = new[] { "dotnet", "newEmpty.dll" };
                 config.Rootfs.DiffIds.Add(appDiffId);
                 string serialized = JsonConvert.SerializeObject(config, Formatting.None);
                 appConfigSize = Encoding.UTF8.GetByteCount(serialized);
