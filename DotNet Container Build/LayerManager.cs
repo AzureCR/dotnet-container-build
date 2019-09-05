@@ -50,9 +50,9 @@ namespace DotNet_Container_Build
             string digest = ComputeDigest(cpy);
             cpy.Position = 0;
 
-            var uploadInfo = await _client.StartEmptyResumableBlobUploadAsync(_repository);
-            var uploadedLayer = await _client.UploadBlobContentFromNextAsync(cpy, uploadInfo.Location.Substring(1));
-            var uploadedLayerEnd = await _client.EndBlobUploadFromNextAsync(digest, uploadedLayer.Location.Substring(1));
+            var uploadInfo = await _client.Blob.StartUploadAsync(_repository);
+            var uploadedLayer = await _client.Blob.UploadAsync(cpy, uploadInfo.Location.Substring(1));
+            var uploadedLayerEnd = await _client.Blob.EndUploadAsync(digest, uploadedLayer.Location.Substring(1));
             return uploadedLayerEnd.DockerContentDigest;
         }
 
@@ -67,7 +67,7 @@ namespace DotNet_Container_Build
         /// </summary>
         public async Task CopyLayersTo(LayerManager output, bool includeConfig, bool consoleOutput)
         {
-            V2Manifest manifest = (V2Manifest)await _client.GetManifestAsync(_repository, _tag, "application/vnd.docker.distribution.manifest.v2+json");
+            V2Manifest manifest = (V2Manifest)await _client.Manifests.GetAsync(_repository, _tag, "application/vnd.docker.distribution.manifest.v2+json");
             var listOfActions = new List<Task>();
 
             // Acquire and upload all layers
@@ -83,9 +83,6 @@ namespace DotNet_Container_Build
                 listOfActions.Add(DownloadAndUpload(manifest.Config.Digest, output, consoleOutput));
             }
             await Task.WhenAll(listOfActions);
-
-            //var options = new ParallelOptions { MaxDegreeOfParallelism = MaxParallel };
-            //Parallel.Invoke(options, listOfActions.ToArray());
         }
 
         /// <summary>
@@ -102,7 +99,7 @@ namespace DotNet_Container_Build
             var progress = new ProgressBar(2, 15);
 
             progress.Refresh(0, "Downloading " + digest + " layer from " + _repository);
-            var layer = await _client.GetBlobAsync(_repository, digest);
+            var layer = await _client.Blob.GetAsync(_repository, digest);
             
             progress.Next("Uploading " + digest + " layer to " + output._repository);
             string digestLayer = await output.UploadLayer(layer);
@@ -153,9 +150,20 @@ namespace DotNet_Container_Build
             stream.Position = 0;
             return stream;
         }
+        private async Task a(string digest) {
+
+            var layer = await _client.Blob.GetAsync(_repository, digest);
+            var uploadInfo = await _client.Blob.StartUploadAsync(_repository);
+            var uploadedLayer = await _client.Blob.UploadAsync(layer, uploadInfo.Location);
+            var uploadedLayerEnd = await _client.Blob.EndUploadAsync(digest, uploadedLayer.Location);
+
+        }
 
 
     }
+
+
+
 }
 
 

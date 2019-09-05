@@ -97,7 +97,7 @@ namespace DotNet_Container_Build
             string appDiffId = ComputeDigest(tarArchive);
             TarOutputStream()
 
-            ManifestWrapper manifest = await client.GetManifestAsync(outputRepo.Repository, layer1Digest, "application/vnd.oci.image.manifest.v1+json");
+            ManifestWrapper manifest = await client.Manifests.GetAsync(outputRepo.Repository, layer1Digest, "application/vnd.oci.image.manifest.v1+json");
 
             long app_size = layer1Read.Length;
             //string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
@@ -138,8 +138,8 @@ namespace DotNet_Container_Build
                 LoginUri = "https://" + baseLayers.Registry
             };
 
-            ManifestWrapper baseManifest = await baseClient.GetManifestAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
-            var configBlob = await baseClient.GetBlobAsync(baseLayers.Repository, baseManifest.Config.Digest);
+            ManifestWrapper baseManifest = await baseClient.Manifests.GetAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
+            var configBlob = await baseClient.Blob.GetAsync(baseLayers.Repository, baseManifest.Config.Digest);
 
             long appConfigSize;
             string appConfigDigest;
@@ -168,10 +168,10 @@ namespace DotNet_Container_Build
                 Size = app_size,
                 Digest = app_digest
             };
-
+            string tag = "";
+            string outputRepository = "";
             newManifest.Layers.Add(newLayer);
-            Console.WriteLine("Creating New Manifest");
-            await client.CreateManifestAsync(outputRepo.Repository, outputRepo.Tag, newManifest);
+            await client.Manifests.CreateAsync(outputRepository, tag, newManifest);
             Console.WriteLine(outputRepo.Repository + ":" + outputRepo.Tag + " Has been created succesfully");
         }
 
