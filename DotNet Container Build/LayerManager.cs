@@ -3,10 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.IO;
 using System.Threading.Tasks;
-using Konsole;
 using System.Collections.Generic;
 using Microsoft.Azure.ContainerRegistry;
 using Microsoft.Azure.ContainerRegistry.Models;
+using ShellProgressBar;
 
 namespace DotNet_Container_Build
 {
@@ -17,6 +17,23 @@ namespace DotNet_Container_Build
         private AzureContainerRegistryClient _client;
         private string _repository;
         private string _tag;
+
+        ProgressBarOptions options = new ProgressBarOptions
+        {
+            ForegroundColor = ConsoleColor.Yellow,
+            BackgroundColor = ConsoleColor.DarkYellow,
+            BackgroundCharacter = '\u25A0',
+            ProgressCharacter = '\u25A0'
+        };
+        ProgressBarOptions childOptions = new ProgressBarOptions
+        {
+            ForegroundColor = ConsoleColor.Green,
+            BackgroundColor = ConsoleColor.DarkGreen,
+            BackgroundCharacter = '\u25A0',
+            ProgressCharacter = '\u25A0',
+            CollapseWhenFinished = false
+
+        };
 
         public LayerManager(ImageRef cur) {
             Microsoft.Rest.ServiceClientCredentials clientCredentials;
@@ -40,18 +57,12 @@ namespace DotNet_Container_Build
         /// <paramref name="blob"/> Stream containing the blob to be uploaded
         /// the registry. If none is specified the internal default will be used. Included for flexibility.
         /// </summary>
-        public async Task<string> UploadLayer(Stream blob)
+        public async Task<string> UploadLayer(Stream blob, string digest)
         {
             // Make copy to obtain the ability to rewind the stream TODO Stop computing digest
-            Stream cpy = new MemoryStream();
-            blob.CopyTo(cpy);
-            cpy.Position = 0;
-
-            string digest = ComputeDigest(cpy);
-            cpy.Position = 0;
 
             var uploadInfo = await _client.Blob.StartUploadAsync(_repository);
-            var uploadedLayer = await _client.Blob.UploadAsync(cpy, uploadInfo.Location.Substring(1));
+            var uploadedLayer = await _client.Blob.UploadAsync(blob, uploadInfo.Location.Substring(1));
             var uploadedLayerEnd = await _client.Blob.EndUploadAsync(digest, uploadedLayer.Location.Substring(1));
             return uploadedLayerEnd.DockerContentDigest;
         }
@@ -65,7 +76,7 @@ namespace DotNet_Container_Build
         /// <paramref name="consoleOutput"/> True indicates progress should be printed to console in the form of
         /// progress bars.
         /// </summary>
-        public async Task CopyLayersTo(LayerManager output, bool includeConfig, bool consoleOutput)
+        public async Task CopyLayersTo(LayerManager output, bool includeConfig, bool consoleOutput, ProgressBar pbar)
         {
             V2Manifest manifest = (V2Manifest)await _client.Manifests.GetAsync(_repository, _tag, "application/vnd.docker.distribution.manifest.v2+json");
             var listOfActions = new List<Task>();
@@ -74,15 +85,15 @@ namespace DotNet_Container_Build
             for (int i = 0; i < manifest.Layers.Count; i++)
             {
                 var cur = i;
-                listOfActions.Add(DownloadAndUpload(manifest.Layers[cur].Digest, output, consoleOutput));
+                listOfActions.Add(DownloadAndUpload(manifest.Layers[cur].Digest, output, consoleOutput, pbar));
             }
-
             if (includeConfig)
             {
                 // Acquire config Blob
-                listOfActions.Add(DownloadAndUpload(manifest.Config.Digest, output, consoleOutput));
+                listOfActions.Add(DownloadAndUpload(manifest.Config.Digest, output, consoleOutput, pbar));
             }
             await Task.WhenAll(listOfActions);
+            
         }
 
         /// <summary>
@@ -94,17 +105,17 @@ namespace DotNet_Container_Build
         /// <paramref name="consoleOutput"/> True indicates progress should be printed to console in the form of
         /// progress bars.
         /// </summary>
-        private async Task DownloadAndUpload(string digest, LayerManager output , bool consoleOutput)
+        private async Task DownloadAndUpload(string digest, LayerManager output , bool consoleOutput, ProgressBar pbar)
         {
-            var progress = new ProgressBar(2, 15);
+            using (var child = pbar.Spawn(2, "child actions", childOptions))
+            {
+                var layer = await _client.Blob.GetAsync(_repository, digest);
+                child.Tick("Step 2 out of 2 Uploading " + digest + " layer to " + output._repository);
+                await output.UploadLayer(layer, digest);
+                child.Tick("Uploaded " + digest + " layer to " + output._repository);
+            }
+            pbar.Tick();
 
-            progress.Refresh(0, "Downloading " + digest + " layer from " + _repository);
-            var layer = await _client.Blob.GetAsync(_repository, digest);
-            
-            progress.Next("Uploading " + digest + " layer to " + output._repository);
-            string digestLayer = await output.UploadLayer(layer);
-
-            progress.Next("Uploaded " + digestLayer + " layer to " + output._repository);
         }
 
         private static string ComputeDigest(Stream s)

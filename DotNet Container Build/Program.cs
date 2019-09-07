@@ -10,9 +10,8 @@ using Microsoft.Azure.ContainerRegistry.Models;
 using Newtonsoft.Json;
 using QuickType;
 using CommandLine;
-using ICSharpCode.SharpZipLib.GZip;
-using ICSharpCode.SharpZipLib.Tar;
-// System.Commandline.Experimental
+using ShellProgressBar;
+//System.Commandline.Experimental
 namespace DotNet_Container_Build
 {
 
@@ -72,12 +71,17 @@ namespace DotNet_Container_Build
 
         private static async Task BuildDotNetImage(string fileOrigin, ImageRef outputRepo)
         {
+            // 0. Identify project files
+            string[] files = System.IO.Directory.GetFiles(fileOrigin, "*.runtimeconfig.json");
 
+           // using (StreamReader r = new StreamReader(files[0]))
+            //{
+              //  string json = r.ReadToEnd();
+               // List<Item> items = JsonConvert.DeserializeObject<List<Item>>(json);
+            //}
+
+            int delay = 50;
             // 1. Upload the .Net files to the specified repository
-
-            string tempFolder = System.IO.Path.GetTempPath();
-            Tar.CreateFromDirectory(tempFolder + "layer1.tar.gz", fileOrigin);
-            FileStream layer1Read = new FileStream(tempFolder + "layer1.tar.gz", FileMode.Open, FileAccess.ReadWrite,FileShare.Read);
 
             var clientCredentials = new AcrClientCredentials(AcrClientCredentials.LoginMode.Basic, outputRepo.Registry, outputRepo.Username, outputRepo.Password);
             var client = new AzureContainerRegistryClient(clientCredentials)
@@ -85,22 +89,26 @@ namespace DotNet_Container_Build
                 LoginUri = "https://" + outputRepo.Registry
             };
 
-            // 2. Acquire the resulting OCI manifest
-            string layer1Digest = ComputeDigest(layer1Read);
-            layer1Read.Position = 0;
+            var oras = new OrasPush()
+            {
+                OrasExe = "C:/ProgramData/Fish/Barrel/oras/0.6.0/oras.exe",
+                Registry = outputRepo.Registry,
+                Tag = outputRepo.Tag,
+                Repository = outputRepo.Repository,
+                PublishDir = fileOrigin,
+                Username = outputRepo.Username,
+                Password = outputRepo.Password
 
-            Stream inStream = File.OpenRead(tempFolder + "layer1.tar.gz");
-            Stream gzipStream = new GZipInputStream(inStream);
+            };
 
-            TarArchive tarArchive = TarArchive.CreateInputTarArchive(gzipStream);
+            if (!oras.Execute())
+                throw new Exception("Could not upload " + fileOrigin);
 
-            string appDiffId = ComputeDigest(tarArchive);
-            TarOutputStream()
+            string orasDigest = oras.digest;
+            ManifestWrapper manifest = await client.Manifests.GetAsync(outputRepo.Repository, orasDigest, "application/vnd.oci.image.manifest.v1+json");
 
-            ManifestWrapper manifest = await client.Manifests.GetAsync(outputRepo.Repository, layer1Digest, "application/vnd.oci.image.manifest.v1+json");
-
-            long app_size = layer1Read.Length;
-            //string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
+            long app_size = (long)manifest.Layers[0].Size;
+            string appDiffId = (string)manifest.Layers[0].Annotations.AdditionalProperties["io.deis.oras.content.digest"];
             string app_digest = manifest.Layers[0].Digest;
 
             // 3. Acquire base for .Net image
@@ -129,9 +137,6 @@ namespace DotNet_Container_Build
                     baseLayers.Tag = "latest";
                     break;
             }
-            var baseLayerManager = new LayerManager(baseLayers);
-            var outputLayerManager = new LayerManager(outputRepo);
-            await baseLayerManager.CopyLayersTo(outputLayerManager, false, true);
 
             var baseClient = new AzureContainerRegistryClient(new TokenCredentials())
             {
@@ -139,40 +144,97 @@ namespace DotNet_Container_Build
             };
 
             ManifestWrapper baseManifest = await baseClient.Manifests.GetAsync(baseLayers.Repository, baseLayers.Tag, "application/vnd.docker.distribution.manifest.v2+json");
-            var configBlob = await baseClient.Blob.GetAsync(baseLayers.Repository, baseManifest.Config.Digest);
 
-            long appConfigSize;
-            string appConfigDigest;
-
-            // 6. Add layer to config blob 
-            using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
+            ProgressBarOptions options = new ProgressBarOptions
             {
-                string originalBlob = reader.ReadToEnd();
-                var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
-                config.Config.Cmd = new[] { "dotnet", "newEmpty.dll" };
-                config.Rootfs.DiffIds.Add(appDiffId);
-                string serialized = JsonConvert.SerializeObject(config, Formatting.None);
-                appConfigSize = Encoding.UTF8.GetByteCount(serialized);
-                appConfigDigest = ComputeDigest(serialized);
-                await outputLayerManager.UploadLayer(GenerateStreamFromString(serialized));
-                // Upload config blob
-            }
-
-            // 7. Modify manifest file for the new layer
-            var newManifest = baseManifest;
-            newManifest.Config.Size = appConfigSize;
-            newManifest.Config.Digest = appConfigDigest;
-            var newLayer = new Descriptor()
-            {
-                MediaType = "application/vnd.docker.image.rootfs.diff.tar.gzip",
-                Size = app_size,
-                Digest = app_digest
+                ForegroundColor = ConsoleColor.Yellow,
+                BackgroundColor = ConsoleColor.DarkYellow,
+                BackgroundCharacter = '\u25A0',
+                ProgressCharacter = '\u25A0'
             };
-            string tag = "";
-            string outputRepository = "";
-            newManifest.Layers.Add(newLayer);
-            await client.Manifests.CreateAsync(outputRepository, tag, newManifest);
-            Console.WriteLine(outputRepo.Repository + ":" + outputRepo.Tag + " Has been created succesfully");
+
+            ProgressBarOptions childOptions = new ProgressBarOptions
+            {
+                ForegroundColor = ConsoleColor.Green,
+                BackgroundColor = ConsoleColor.DarkGreen,
+                BackgroundCharacter = '\u25A0',
+                ProgressCharacter = '\u25A0',
+                CollapseWhenFinished = false
+            };
+
+            using (var pbar = new ProgressBar(baseManifest.Layers.Count + 1, "Constructing image " + outputRepo.Repository + ":" + outputRepo.Tag, options))
+            {
+                var baseLayerManager = new LayerManager(baseLayers);
+                var outputLayerManager = new LayerManager(outputRepo);
+                await baseLayerManager.CopyLayersTo(outputLayerManager, false, true, pbar);
+
+                using (var child = pbar.Spawn(10, "Modifying Config Blob", childOptions))
+                {
+                    child.Tick("Download Config Blob");
+                    Thread.Sleep(delay);
+                    var configBlob = await baseClient.Blob.GetAsync(baseLayers.Repository, baseManifest.Config.Digest);
+                    long appConfigSize;
+                    string appConfigDigest;
+
+                    // 6. Add layer to config blob 
+                    using (StreamReader reader = new StreamReader(configBlob, Encoding.UTF8))
+                    {
+                        child.Tick("Parsing Config Blob");
+                        Thread.Sleep(delay);
+
+                        string originalBlob = reader.ReadToEnd();
+                        var config = JsonConvert.DeserializeObject<ConfigBlob>(originalBlob);
+                        child.Tick("Add cmd run configuration to config blob");
+                        Thread.Sleep(delay);
+
+                        config.Config.Cmd = new[] { "dotnet", "newEmpty.dll" };
+                        child.Tick("Add new layer info to Rootfs");
+                        Thread.Sleep(delay);
+
+                        config.Rootfs.DiffIds.Add(appDiffId);
+                        child.Tick("Serialize config blob");
+                        Thread.Sleep(delay);
+
+                        string serialized = JsonConvert.SerializeObject(config, Formatting.None);
+                        appConfigSize = Encoding.UTF8.GetByteCount(serialized);
+                        appConfigDigest = ComputeDigest(serialized);
+                        child.Tick("Uploading config blob");
+                        Thread.Sleep(delay);
+
+                        await outputLayerManager.UploadLayer(GenerateStreamFromString(serialized), appConfigDigest);
+                        // Upload config blob
+                    }
+
+                    // 7. Modify manifest file for the new layer
+                    child.Tick("Building new Manifest");
+                    Thread.Sleep(delay);
+                    var newManifest = baseManifest;
+                    newManifest.Config.Size = appConfigSize;
+                    newManifest.Config.Digest = appConfigDigest;
+                    child.Tick("Adding new layer information");
+                    Thread.Sleep(delay);
+
+                    var newLayer = new Descriptor()
+                    {
+                        MediaType = "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                        Size = app_size,
+                        Digest = app_digest
+                    };
+                    newManifest.Layers.Add(newLayer);
+                    child.Tick("Uploading new manifest for " + outputRepo.Repository +":"+ outputRepo.Tag);
+                    Thread.Sleep(delay);
+
+                    await client.Manifests.CreateAsync(outputRepo.Repository, outputRepo.Tag, newManifest);
+                    child.Tick("Manifest upload complete for " + outputRepo.Repository + ":" + outputRepo.Tag);
+                    Thread.Sleep(delay);
+
+                    pbar.Tick("Added new Manifest");
+                    Thread.Sleep(delay);
+                }
+            }
+                Console.WriteLine(outputRepo.Repository + ":" + outputRepo.Tag + " Has been created succesfully");
+                Thread.Sleep(delay);
+
         }
 
         struct BlobData
